@@ -1,7 +1,7 @@
 import { Controller, Get, VERSION_NEUTRAL } from '@nestjs/common';
 import { AppService } from './app.service';
-import { Public } from './core/decorators/public.decorator';
-import { ResponseMessage } from './core/decorators/response-message.decorator';
+import { Public } from './common/decorators/public.decorator';
+import { ResponseMessage } from './common/decorators/response-message.decorator';
 
 /**
  * Version-neutral: the health check answers at `/api/health` regardless of

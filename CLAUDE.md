@@ -4,88 +4,233 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-NestJS 11 on TypeORM + Postgres, with the layered layout below in place and one feature module built out: **auth**. Still no commits — every file is untracked.
+NestJS 11 on TypeORM + Postgres. Two feature modules built out: **auth** (full) and **users** (minimal). Committed history exists — `master` has the initial import, feature work branches off it.
 
-What exists: `@nestjs/config` with fail-fast Zod env validation, TypeORM wired through `shared/database/`, the full `core/` cross-cutting set (guards, interceptors, filters, decorators, Zod pipe), and `modules/auth` + `modules/users`.
+What exists: `config/config.module.ts` with fail-fast Zod env validation, TypeORM wired through `database/` with one applied migration (`CreateAuthTables`), the full cross-cutting set in `common/` (guards, interceptors, filters, decorators, Zod pipe), `api/v1/auth` + `api/v1/users`, and `shared/mailer/` sending over real SMTP via nodemailer.
 
-What does not: any blog-post domain model. Adding one means copying the feature-module pattern — `modules/users/` is the smallest complete example, `modules/auth/` the fullest.
+What does not: any blog-post domain model. Adding one means copying the feature-module pattern — `api/v1/users/` is the smallest complete example, `api/v1/auth/` the fullest.
 
-Sections marked *(planned)* below describe agreed-but-unbuilt pieces. Everything else is on disk.
+Sections marked *(planned)* describe agreed-but-unbuilt pieces.
 
-## Intended architecture
+## Architecture
 
-Five layers in `src/`, each with one responsibility. Adding a domain feature means copying the feature-module pattern — no changes to other layers.
+The layout below is what is on disk. Adding a domain feature means copying the feature-module pattern — no changes to other layers.
 
 ```
 src/
-├── core/            # App-wide singletons, wired once via CoreModule
-│   ├── guards/          jwt-auth, refresh-token, roles (RBAC), throttle
-│   ├── interceptors/    logging, transform (response envelope), timeout
-│   ├── filters/         all-exception
-│   ├── decorators/      public, roles, current-user, response-message
-│   ├── pipes/           zod-validation
-│   └── core.module.ts
-├── common/          # Pure TypeScript — no NestJS module deps, safe to import anywhere
-│   ├── entities/        base.entity (id, createdAt, updatedAt)
-│   ├── enums/           role, token-type
-│   ├── interfaces/      jwt-payload
-│   ├── utils/           hash, duration
-│   └── constants/       auth.constants
-├── config/          # One typed registerAs factory per concern
-│   └── app · database · jwt · throttle · cors + env.validation.ts
-├── modules/         # One folder per bounded context
-│   ├── auth/            + strategies/ (jwt, refresh-token)
-│   ├── users/           ← the template; copy it for every new feature
-│   └── …
-├── shared/          # Infrastructure modules, imported only where needed
-│   ├── database/        + migrations/, data-source.ts (CLI only)
-│   ├── mailer/          dev transport logs; swap `deliver` for SMTP
-│   └── …                (planned) cache (Redis) · queue (BullMQ) · storage · logger
-├── app.module.ts    # Root
-├── app.controller.ts# Health check only (version-neutral)
-└── main.ts          # Bootstrap
+│
+├── common/                          # Shared across ALL versions & modules
+│   ├── decorators/
+│   │   ├── api-paginated.decorator.ts
+│   │   ├── current-user.decorator.ts
+│   │   ├── roles.decorator.ts
+│   │   └── public.decorator.ts
+│   ├── dto/
+│   │   ├── pagination.dto.ts        # Reusable query params (page, limit, sort)
+│   │   └── id-param.dto.ts
+│   ├── enums/
+│   │   ├── role.enum.ts
+│   │   └── status.enum.ts
+│   ├── exceptions/
+│   │   ├── base.exception.ts
+│   │   └── http-exception.filter.ts # OWASP A05: never expose raw errors
+│   ├── guards/
+│   │   ├── jwt.guard.ts
+│   │   ├── roles.guard.ts
+│   │   └── throttle.guard.ts        # OWASP A04: rate limiting
+│   ├── interceptors/
+│   │   ├── response.interceptor.ts  # Wraps ALL responses in { data, meta }
+│   │   ├── logging.interceptor.ts
+│   │   └── timeout.interceptor.ts   # OWASP A04: prevent slow-loris
+│   ├── middlewares/
+│   │   ├── helmet.middleware.ts     # OWASP A05: security headers
+│   │   ├── cors.middleware.ts
+│   │   └── sanitize.middleware.ts   # OWASP A03: input sanitization
+│   ├── pipes/
+│   │   ├── validation.pipe.ts       # Global — strips unknown fields
+│   │   ├── parse-uuid.pipe.ts
+│   │   └── trim.pipe.ts
+│   ├── traits/                      # API trait reusables (mixins)
+│   │   ├── crud.trait.ts            # Mixin: generates CRUD endpoints
+│   │   ├── soft-delete.trait.ts     # Mixin: adds softDelete logic
+│   │   ├── auditable.trait.ts       # Mixin: createdBy, updatedBy
+│   │   ├── searchable.trait.ts      # Mixin: full-text search pattern
+│   │   └── exportable.trait.ts      # Mixin: CSV/Excel export
+│   ├── types/
+│   │   ├── express.d.ts             # Augments req.user
+│   │   ├── pagination.type.ts
+│   │   └── api-response.type.ts
+│   └── utils/
+│       ├── crypto.util.ts           # OWASP A02: hashing, token gen
+│       ├── date.util.ts
+│       └── string.util.ts
+│
+├── config/                          # App-wide config (validated at startup)
+│   ├── app.config.ts
+│   ├── database.config.ts
+│   ├── jwt.config.ts
+│   ├── throttle.config.ts           # OWASP A04: rate limit config
+│   ├── security.config.ts           # helmet, cors, csp settings
+│   └── config.module.ts             # Loads & validates all configs
+│
+├── database/                        # DB layer — separate from business logic
+│   ├── migrations/
+│   ├── seeders/
+│   ├── subscribers/                 # TypeORM event hooks
+│   └── database.module.ts
+│
+├── api/                             # All versioned API surface lives here
+│   │
+│   ├── v1/
+│   │   ├── v1.module.ts             # Registers all v1 modules
+│   │   │
+│   │   ├── auth/
+│   │   │   ├── controllers/
+│   │   │   │   └── auth.controller.ts
+│   │   │   ├── dto/
+│   │   │   │   ├── login.dto.ts
+│   │   │   │   ├── register.dto.ts
+│   │   │   │   └── refresh-token.dto.ts
+│   │   │   ├── guards/
+│   │   │   │   └── local.guard.ts
+│   │   │   ├── strategies/
+│   │   │   │   ├── jwt.strategy.ts
+│   │   │   │   └── local.strategy.ts
+│   │   │   ├── services/
+│   │   │   │   └── auth.service.ts
+│   │   │   └── auth.module.ts
+│   │   │
+│   │   ├── users/
+│   │   │   ├── controllers/
+│   │   │   │   └── users.controller.ts
+│   │   │   ├── dto/
+│   │   │   │   ├── create-user.dto.ts
+│   │   │   │   ├── update-user.dto.ts
+│   │   │   │   └── user-response.dto.ts  # Never return raw entities
+│   │   │   ├── entities/
+│   │   │   │   └── user.entity.ts
+│   │   │   ├── repositories/
+│   │   │   │   └── user.repository.ts    # Repo pattern = testable
+│   │   │   ├── services/
+│   │   │   │   └── users.service.ts
+│   │   │   └── users.module.ts
+│   │   │
+│   │   └── products/                # Add any domain module the same way
+│   │       ├── controllers/
+│   │       ├── dto/
+│   │       ├── entities/
+│   │       ├── repositories/
+│   │       ├── services/
+│   │       └── products.module.ts
+│   │
+│   └── v2/
+│       ├── v2.module.ts             # Registers all v2 modules
+│       │
+│       └── users/                   # Only override what changes
+│           ├── controllers/
+│           │   └── users.controller.ts  # New endpoints or breaking changes
+│           ├── dto/
+│           │   └── user-response-v2.dto.ts
+│           ├── services/
+│           │   └── users.service.ts     # Extends v1 service if needed
+│           └── users.module.ts
+│
+├── shared/                          # Reusable business-layer classes
+│   ├── base/
+│   │   ├── base.entity.ts           # id, createdAt, updatedAt, deletedAt
+│   │   ├── base.service.ts          # Generic CRUD<T> service
+│   │   ├── base.repository.ts       # Generic repo with find/paginate
+│   │   └── base.controller.ts       # Generic controller wires traits
+│   ├── mailer/
+│   │   ├── mailer.service.ts
+│   │   ├── templates/
+│   │   └── mailer.module.ts
+│   ├── storage/
+│   │   ├── storage.service.ts       # S3 / local adapter
+│   │   └── storage.module.ts
+│   └── queue/
+│       ├── queue.service.ts
+│       └── queue.module.ts
+│
+├── app.module.ts                    # Root — wires config, db, api/v1, api/v2
+└── main.ts                          # Bootstrap: helmet, versioning, swagger, pipes
 ```
 
 Layer rules that matter:
 
-- **`common/` must stay free of NestJS module dependencies.** That's what makes it importable from anywhere without circular-dependency risk. Pure types, utils, and constants only.
-- **`core/` holds cross-cutting behavior; features don't reimplement it.** `transform.interceptor.ts` wraps every response as `{ data, message, status }`, and the validation pipe strips unknown fields from all incoming bodies — so controllers should not hand-roll response shaping or input sanitizing.
-- **`shared/` modules are infrastructure and must not be re-instantiated per feature** — import the module, inject the service.
-- **`config/` keeps security-sensitive settings in their own files** (`jwt.config.ts`, `cors.config.ts`) so they can be audited in isolation.
+- **`common/` is the cross-cutting layer** — guards, interceptors, pipes, filters, middlewares, decorators, plus shared types and utils. It depends on NestJS, so it is *not* import-anywhere-safe the way a pure-types folder would be. Keep `types/`, `enums/`, and `utils/` free of Nest imports so the leaf modules stay cycle-proof even though the folder as a whole is not.
+- **Cross-cutting behavior lives in `common/`; features never reimplement it.** `response.interceptor.ts` wraps every response, and the global validation pipe strips unknown fields from all incoming bodies — so controllers must not hand-roll response shaping or input sanitizing.
+- **`api/` holds every route.** A folder per version, a folder per feature inside it, and each feature splits into `controllers/ dto/ entities/ repositories/ services/`. Nothing outside `api/` declares a controller.
+- **`shared/` is the reusable business layer** — generic base classes plus infrastructure services (mailer, storage, queue). Infrastructure modules must not be re-instantiated per feature; import the module, inject the service.
+- **`database/` owns schema concerns only** — migrations, seeders, subscribers. No business logic.
+- **`config/` keeps security-sensitive settings in their own files** (`jwt.config.ts`, `security.config.ts`) so they can be audited in isolation.
+
+### `api/v1/` is a source folder, not a URL segment
+
+Easy to conflate, and getting it wrong produces `/api/v1/v1/users`. The folder decides where code lives; the **URL version still comes from the controller decorator**:
+
+```ts
+// file: src/api/v1/users/controllers/users.controller.ts
+@Controller({ path: 'users', version: '1' })   // → /api/v1/users
+```
+
+`setGlobalPrefix` supplies `api`, `enableVersioning` supplies `v1`. The folder name never appears in a route.
 
 ### Feature module pattern
 
 ```
-modules/<feature>/
-├── dto/            create-<feature>.dto.ts, update-<feature>.dto.ts (partial of create)
+api/v<n>/<feature>/
+├── controllers/    <feature>.controller.ts — routes, guards, Swagger decorators
+├── dto/            create-<feature>.dto.ts, update-<feature>.dto.ts, <feature>-response.dto.ts
 ├── entities/       <feature>.entity.ts — extends BaseEntity
 ├── repositories/   <feature>.repository.ts — wraps the ORM repo
-├── <feature>.controller.ts   routes, guards, Swagger decorators
-├── <feature>.service.ts      business logic
+├── services/       <feature>.service.ts — business logic
 └── <feature>.module.ts
 ```
 
-Scaffold with `nest g module modules/<feature>` (then `controller`, `service` with the same path prefix) — `nest-cli.json` sets `sourceRoot: src`, so the path is relative to `src/`.
+Register the module in that version's `v<n>.module.ts`, not in `AppModule` — `AppModule` imports only `V1Module`, `V2Module`, and the infrastructure modules.
 
-**Separation rule, strictly enforced:** controllers contain no business logic; services contain business logic only; repositories contain all DB queries. Removing a feature should be `rm -rf` on its folder plus one line out of `AppModule`.
+**Separation rule, strictly enforced:** controllers contain no business logic; services contain business logic only; repositories contain all DB queries. Removing a feature should be `rm -rf` on its folder plus one line out of its version module.
+
+### Versioning a feature: copy, don't inherit
+
+`api/v2/` holds only what actually changed. Everything else keeps serving from v1.
+
+The tree marks `v2/users/services/users.service.ts` as "extends v1 service if needed" — treat that as a last resort. Cross-version inheritance couples the two: a change to the v1 service silently alters v2 behavior, which is the exact thing versioning exists to prevent. Prefer extracting shared logic into `shared/base/` or a version-neutral service, and let each version's service compose it.
+
+### Deviations from the reference tree
+
+Four places where the code differs from the structure diagram, each on purpose:
+
+- **`common/common.module.ts` exists** though the tree shows no module there. The global `APP_GUARD` / `APP_INTERCEPTOR` / `APP_FILTER` registrations and `ThrottlerModule.forRootAsync` need a module to live in; putting them here keeps `AppModule` down to four imports.
+- **`common/constants/` is kept.** `auth.constants.ts` holds `BCRYPT_ROUNDS`, consumed by `common/utils/crypto.util.ts`, so it cannot move into a feature folder without inverting the dependency.
+- **`api/v1/auth/guards/refresh-token.guard.ts`** rather than `common/guards/` — it is auth-specific and nothing else uses it. `common/guards/` holds only the three genuinely global guards.
+- **Class names kept where the tree only renamed files.** `validation.pipe.ts` still exports `ZodValidationPipe` (a bare `ValidationPipe` collides with Nest's built-in), and `http-exception.filter.ts` still exports `AllExceptionsFilter` (it is `@Catch()` with no argument — it catches everything, not just `HttpException`). `transform.interceptor.ts` → `response.interceptor.ts` did rename its class to `ResponseInterceptor`, since that name stayed accurate.
+
+Not yet built: `common/traits/`, `common/dto/`, `common/middlewares/`, `common/decorators/api-paginated.decorator.ts`, `database/seeders/`, `database/subscribers/`, `shared/base/` generics (only `base.entity.ts` exists), `shared/storage/`, `shared/queue/`, `api/v2/`.
+
+**`BaseEntity` has no `deletedAt`.** The reference tree lists one, but adding it changes the schema for every table and turns on soft-delete semantics — a behavioural change, not a move. It was deliberately left out of the restructure; add it with a migration when soft-delete is actually wanted.
+
+**Validation stays Zod, not Joi.** `config/env.validation.ts` and every DTO use Zod, schemas compose via `z.infer`, and the pipe depends on Zod's strip-unknown-keys behavior. Do not swap it without a deliberate decision.
 
 ### Security expectations
 
 | Concern | Mechanism | Where |
 |---|---|---|
-| Authentication | JWT access + refresh tokens | `modules/auth/strategies/` |
-| Authorization | RBAC | `core/guards/roles.guard.ts` |
-| Rate limiting | Per-route throttling | `core/guards/throttle.guard.ts` |
-| Input validation | Strict schema, unknown fields stripped | `core/pipes/zod-validation.pipe.ts` |
+| Authentication | JWT access + refresh tokens | `api/v1/auth/strategies/` |
+| Authorization | RBAC | `common/guards/roles.guard.ts` |
+| Rate limiting | Per-route throttling | `common/guards/throttle.guard.ts` |
+| Input validation | Strict schema, unknown fields stripped | `common/pipes/validation.pipe.ts` |
 | HTTP headers | Helmet | `main.ts` |
-| CORS | Allowlist origins | `config/cors.config.ts` |
+| CORS | Allowlist origins | `config/security.config.ts` |
 | Secrets | Env vars only | `.env` + `config/*.config.ts` |
-| Errors | Never leak stack traces | `core/filters/all-exception.filter.ts` |
-| Password hashing | bcrypt, cost 12 | `common/utils/hash.util.ts` |
+| Errors | Never leak stack traces | `common/exceptions/http-exception.filter.ts` |
+| Password hashing | bcrypt, cost 12 | `common/utils/crypto.util.ts` |
 
-`main.ts` wires: `helmet()`, `enableCors(corsConfig())`, `setGlobalPrefix('api')`, `enableVersioning(...)`, a 100kb body cap, and `trust proxy 1`. Global filters/interceptors/guards come from `CoreModule` via `APP_*` tokens, not from `main.ts`.
+`main.ts` wires: `helmet()`, `enableCors(security.cors)`, `setGlobalPrefix('api')`, `enableVersioning(...)`, and the body cap / trust-proxy hops read from `security.config.ts`. Global filters/interceptors/guards are registered via `APP_*` tokens in `CommonModule`, not from `main.ts`.
 
-Root-level env files: `.env`, `.env.example`, `.env.test`. **Only `.env.example` gets committed** — `.gitignore` already covers the rest.
+Root-level env files: `.env`, `.env.example`, `.env.test` *(not yet created)*. **Only `.env.example` gets committed** — `.gitignore` already covers the rest.
+
 
 ## API versioning — required for every route
 
@@ -149,7 +294,7 @@ npm run test:e2e             # e2e tests
 npm run test:cov             # coverage → ./coverage
 npm run migration:run        # apply migrations (needs a reachable Postgres)
 npm run migration:revert     # roll back the last one
-npm run migration:generate -- src/shared/database/migrations/<Name>
+npm run migration:generate -- src/database/migrations/<Name>
 ```
 
 Single test / single file:

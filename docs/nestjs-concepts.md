@@ -107,10 +107,10 @@ service.
 
 ### `@Global()` — use sparingly
 
-`CoreModule` is marked `@Global()`, so its providers are available everywhere
+`CommonModule` is marked `@Global()`, so its providers are available everywhere
 without importing it. That is correct for genuinely app-wide cross-cutting
 concerns and wrong for almost everything else. Two global modules here:
-`CoreModule` and `ConfigModule` (via `isGlobal: true`). Feature modules are
+`CommonModule` and `ConfigModule` (via `isGlobal: true`). Feature modules are
 never global.
 
 ### Async module configuration
@@ -124,7 +124,7 @@ TypeOrmModule.forRootAsync({
 
 `forRoot` takes a static object. `forRootAsync` takes a factory that runs after
 DI is available — which is how the database module reads validated config rather
-than poking at `process.env` directly. Same pattern in `CoreModule` for the
+than poking at `process.env` directly. Same pattern in `CommonModule` for the
 throttler.
 
 Convention worth knowing: `forRoot`/`forRootAsync` configures a module once,
@@ -137,28 +137,28 @@ a feature's repositories may inject.
 
 ```
 src/
-├── core/      cross-cutting behaviour, wired once
-├── common/    pure TypeScript, zero Nest dependencies
-├── config/    one typed factory per concern
-├── modules/   one folder per bounded context
-└── shared/    infrastructure modules
+├── common/    cross-cutting behaviour, wired once via CommonModule
+├── config/    one typed factory per concern + config.module.ts
+├── database/  migrations, seeders, subscribers
+├── api/       every route — a folder per version, a folder per feature
+└── shared/    base classes + infrastructure modules
 ```
 
-### Why `common/` must stay Nest-free
+### Why the leaves of `common/` stay Nest-free
 
-`common/` holds `BaseEntity`, enums, interfaces, `hash.util.ts`,
-`duration.util.ts` — types, functions, constants. No `@Injectable()`, no module
-imports.
+`common/` as a whole depends on NestJS — it holds guards, interceptors, pipes
+and filters. But its leaf folders (`types/`, `enums/`, `utils/`,
+`constants/`) deliberately do not import anything from Nest.
 
-This is what makes it safe to import from *anywhere* without circular-dependency
-risk. The moment `common/` imports a Nest module, you have a potential cycle:
-feature → common → module → feature. Keeping it pure means the import graph is
-always a tree from this layer.
+That is what keeps them safe to import from *anywhere* without
+circular-dependency risk. The moment a leaf imports a Nest module you have a
+potential cycle: feature → common → module → feature. Keeping the leaves pure
+means the import graph stays a tree from those files down.
 
-### Why `core/` exists
+### Why the cross-cutting layer exists
 
-Behaviour that applies to every request lives here once, so features never
-reimplement it. Concretely: a controller in this codebase does **not** shape its
+Behaviour that applies to every request lives in `common/` once, so features
+never reimplement it. Concretely: a controller in this codebase does **not** shape its
 own response envelope (the interceptor does it), does **not** sanitise its own
 input (the pipe does it), and does **not** format its own errors (the filter
 does it).
@@ -307,7 +307,7 @@ final status.
 When a handler throws, the response path does not run — `AllExceptionsFilter`
 writes the response itself. That is why the filter manually constructs
 `{ data, message, status }`: it has to reproduce the envelope, because
-`TransformInterceptor` never sees an error. Change the envelope shape in one
+`ResponseInterceptor` never sees an error. Change the envelope shape in one
 place and you must change the other.
 
 ---
@@ -481,7 +481,7 @@ The health check is the deliberate exception — `VERSION_NEUTRAL` puts it at
 { "data": {...}, "message": "Login successful", "status": 200 }
 ```
 
-Applied globally by `TransformInterceptor`; the per-route text comes from
+Applied globally by `ResponseInterceptor`; the per-route text comes from
 `@ResponseMessage('...')` metadata. Errors get the same shape from
 `AllExceptionsFilter`, plus `errors`, `timestamp`, and `path`.
 
@@ -617,7 +617,7 @@ a production mystery.
 
 ## 12. Adding a feature — the checklist
 
-Copy `modules/users/` (smallest complete example; `modules/auth/` is the
+Copy `api/v1/users/` (smallest complete example; `api/v1/auth/` is the
 fullest).
 
 ```
@@ -632,7 +632,7 @@ modules/<feature>/
 
 1. Entity extends `BaseEntity` (uuid `id`, `createdAt`, `updatedAt`), explicit
    `@Column({ name: 'snake_case' })`.
-2. `npm run migration:generate -- src/shared/database/migrations/<Name>` — then
+2. `npm run migration:generate -- src/database/migrations/<Name>` — then
    **read the generated file**; it is a schema differ, not a migration author.
 3. Zod schema in `dto/`, type via `z.infer`.
 4. Repository injecting `Repository<T>` via `@InjectRepository`.
@@ -644,7 +644,7 @@ modules/<feature>/
 8. One line in `AppModule.imports`.
 
 Do **not** add: response shaping, input sanitising, error formatting, or auth
-checks. Those are `core/`'s job and already run.
+checks. Those are `common/`'s job and already run.
 
 ### Tests
 
