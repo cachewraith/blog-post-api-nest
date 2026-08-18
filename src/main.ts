@@ -5,7 +5,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import appConfig from './config/app.config';
-import corsConfig from './config/cors.config';
+import securityConfig from './config/security.config';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -14,19 +14,21 @@ async function bootstrap() {
   });
 
   const config = app.get<ConfigType<typeof appConfig>>(appConfig.KEY);
-  const cors = app.get<ConfigType<typeof corsConfig>>(corsConfig.KEY);
+  const security = app.get<ConfigType<typeof securityConfig>>(
+    securityConfig.KEY,
+  );
 
   // Security headers: CSP, HSTS, nosniff, frame denial (OWASP A05).
   app.use(helmet());
 
   // Trust exactly one proxy hop. Without a bound, a client could forge
   // X-Forwarded-For and slip the IP-keyed rate limiter (OWASP A04).
-  app.set('trust proxy', 1);
+  app.set('trust proxy', security.trustProxyHops);
 
   // Hide the framework fingerprint.
   app.disable('x-powered-by');
 
-  app.enableCors(cors);
+  app.enableCors(security.cors);
   app.setGlobalPrefix(config.apiPrefix);
 
   // URI versioning: routes resolve to /{prefix}/v{version}/{path}. Controllers
@@ -38,8 +40,11 @@ async function bootstrap() {
   });
 
   // Cap request bodies — auth payloads are tiny, so anything larger is abuse.
-  app.useBodyParser('json', { limit: '100kb' });
-  app.useBodyParser('urlencoded', { limit: '100kb', extended: true });
+  app.useBodyParser('json', { limit: security.bodyLimit });
+  app.useBodyParser('urlencoded', {
+    limit: security.bodyLimit,
+    extended: true,
+  });
 
   app.enableShutdownHooks();
 
