@@ -7,6 +7,7 @@ import corsConfig from './config/cors.config';
 import databaseConfig from './config/database.config';
 import { validateEnv } from './config/env.validation';
 import jwtConfig from './config/jwt.config';
+import mailConfig from './config/mail.config';
 import throttleConfig from './config/throttle.config';
 import { CoreModule } from './core/core.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -19,7 +20,14 @@ import { DatabaseModule } from './shared/database/database.module';
       isGlobal: true,
       cache: true,
       envFilePath: ['.env.local', '.env'],
-      load: [appConfig, databaseConfig, jwtConfig, throttleConfig, corsConfig],
+      load: [
+        appConfig,
+        databaseConfig,
+        jwtConfig,
+        throttleConfig,
+        corsConfig,
+        mailConfig,
+      ],
       // Boot fails loudly on a missing or weak secret rather than starting
       // with a default (OWASP A05).
       validate: validateEnv,
